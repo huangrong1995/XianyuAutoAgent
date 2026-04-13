@@ -1,0 +1,11 @@
+{
+  "name": "商品上架机器人",
+  "description": "基于 Playwright 的闲鱼自动上架工具，稳定模拟人工操作",
+  "products_excel": "products.xlsx",
+  "state_file": "data/publish_state.json",
+  "config": {
+    "headless": false,
+    "loop_interval_hours": 6,
+    "delay_between_publish_seconds": 30
+  }
+}

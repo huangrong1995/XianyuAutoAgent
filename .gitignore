@@ -52,3 +52,6 @@ htmlcov/
 .nox/
 .hypothesis/
 .coverage.* 
+# 数据文件（包含敏感信息，不提交）
+data/
+

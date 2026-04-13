@@ -2,8 +2,12 @@ import re
 import os
 import httpx
 from typing import List, Dict, Optional
+from dotenv import load_dotenv
 from openai import OpenAI
 from loguru import logger
+
+# 加载 .env 环境变量
+load_dotenv()
 
 
 def is_ollama_available() -> bool:
@@ -94,13 +98,12 @@ class XianyuReplyBot:
                     kwargs["extra_body"] = extra_body
                 response = client.chat.completions.create(**kwargs)
             else:
-                # 本地调用（Ollama）
+                # 本地调用（Ollama OpenAI兼容端点）
                 kwargs = {
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                    "options": {"top_p": top_p},
                 }
                 response = client.chat.completions.create(**kwargs)
 
@@ -319,11 +322,9 @@ class TechAgent(BaseAgent):
     def generate(self, user_msg: str, item_desc: str, context: str, bargain_count: int = 0) -> str:
         messages = self._build_messages(user_msg, item_desc, context)
 
-        response = self.bot._call_llm(
-            messages,
-            temperature=0.4,
-            extra_body={"enable_search": True} if self.bot.remote_client else None
-        )
+        # 百炼 enable_search 仅远程可用
+        extra = {"enable_search": True} if (not self.bot.local_available and self.bot.remote_client) else None
+        response = self.bot._call_llm(messages, temperature=0.4, extra_body=extra)
         return self.safety_filter(response)
 
 

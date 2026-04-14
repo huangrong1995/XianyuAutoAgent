@@ -149,8 +149,7 @@ class XianyuLive:
                 },
                 {
                     "actualReceivers": [
-                        f"{toid}@goofish",
-                        f"{self.myid}@goofish"
+                        f"{toid}@goofish"
                     ]
                 }
             ]

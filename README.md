@@ -116,16 +116,7 @@ https://github.com/cv-cat/XianYuApis
 ## 📱 交流群
 欢迎加入项目交流群，交流技术、分享经验、互助学习。
 <div align="center">
-  <table>
-    <tr>
-      <td align="center"><strong>交流群22（已满200）</strong></td>
-      <td align="center"><strong>交流群23（推荐加入）</strong></td>
-    </tr>
-    <tr>
-      <td><img src="./images/wx_group22.png" width="300px" alt="交流群22"></td>
-      <td><img src="./images/wx_group23.png" width="300px" alt="交流群23"></td>
-    </tr>
-  </table>
+  <img src="./images/wx_group.jpg" width="300px" alt="交流群">
 </div>
 
 ## 💼 寻找机会
@@ -141,7 +132,7 @@ https://github.com/cv-cat/XianYuApis
 您的☕和⭐将助力项目持续更新：
 
 <div align="center">
-  <img src="./images/wechat_pay.jpg" width="400px" alt="微信赞赏码"> 
+  <img src="./images/wechatpay.jpg" width="400px" alt="微信赞赏码"> 
   <img src="./images/alipay.jpg" width="400px" alt="支付宝收款码">
 </div>
 

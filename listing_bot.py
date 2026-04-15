@@ -395,7 +395,7 @@ def try_relist(product: dict, config: dict) -> str:
         result = relist_with_playwright(product, config)
         return result
     except ImportError:
-        print(f"   ⚠️  Playwright未安装")
+        print(f"   ⚠️  Playwright未安装或不可用，上架失败")
         return ""
 
 

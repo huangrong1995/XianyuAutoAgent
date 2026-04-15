@@ -123,7 +123,7 @@ https://github.com/cv-cat/XianYuApis
 ## 📱 交流群
 欢迎加入项目交流群，交流技术、分享经验、互助学习。
 <div align="center">
-  <img src="./images/wx_group.png" width="300px" alt="交流群">
+  <img src="./images/wx_group.jpg" width="300px" alt="交流群">
 </div>
 
 ## 💼 寻找机会

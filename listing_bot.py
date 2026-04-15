@@ -308,14 +308,73 @@ def relist_with_api(product: dict, config: dict) -> str:
 
     t = str(int(time.time() * 1000))
 
-    # 构建请求数据
+    # 构建请求数据（根据抓包结果）
+    price = product.get("price", "0")
+    price_in_cent = str(int(float(price) * 100)) if price else "1000"
+
     item_data = {
-        "title": product.get("title", ""),
-        "price": product.get("price", "0"),
-        "description": product.get("desc", ""),
-        "category": product.get("category", "other"),
-        "tags": product.get("tags", "").split(",") if product.get("tags") else [],
-        " images": [],  # 图片需要额外上传
+        "freebies": False,
+        "itemTypeStr": "b",
+        "quantity": "1",
+        "simpleItem": "true",
+        "imageInfoDOList": [],  # 暂时留空，需要图片上传
+        "itemTextDTO": {
+            "desc": product.get("desc", "NA"),
+            "title": product.get("title", "NA"),
+            "titleDescSeparate": False
+        },
+        "itemLabelExtList": [{
+            "channelCateName": "软件安装包/序列号/激活码",
+            "valueId": None,
+            "channelCateId": "201449620",
+            "valueName": None,
+            "tbCatId": "50003316",
+            "subPropertyId": None,
+            "labelType": "common",
+            "subValueId": None,
+            "labelId": None,
+            "propertyName": "分类",
+            "isUserClick": "0",
+            "isUserCancel": None,
+            "from": "newPublishChoice",
+            "propertyId": "-10000",
+            "labelFrom": "newPublish",
+            "text": "软件安装包/序列号/激活码",
+            "properties": "-10000##分类:201449620##软件安装包/序列号/激活码"
+        }],
+        "itemPriceDTO": {
+            "priceInCent": price_in_cent
+        },
+        "userRightsProtocols": [
+            {"enable": False, "serviceCode": "AI_SALE"},
+            {"enable": False, "serviceCode": "SKILL_PLAY_NO_MIND"}
+        ],
+        "itemPostFeeDTO": {
+            "canFreeShipping": True,
+            "supportFreight": True,
+            "onlyTakeSelf": True
+        },
+        "itemAddrDTO": {
+            "area": "仓山区",
+            "city": "福州",
+            "divisionId": 350104,
+            "gps": "26.048661,119.241787",
+            "poiId": "B024F0XWXC",
+            "poiName": "新榕金城湾",
+            "prov": "福建"
+        },
+        "defaultPrice": False,
+        "itemCatDTO": {
+            "catId": "50025461",
+            "catName": "软件安装包/序列号/激活码",
+            "channelCatId": "201449620",
+            "leafId": "1831",
+            "tbCatId": "50003316"
+        },
+        "uniqueCode": t + "716",
+        "sourceId": "pcMainPublish",
+        "bizcode": "pcMainPublish",
+        "publishScene": "pcMainPublish"
     }
 
     data_val = json.dumps(item_data, ensure_ascii=False)
@@ -337,8 +396,8 @@ def relist_with_api(product: dict, config: dict) -> str:
         "api": "mtop.idle.pc.idleitem.publish",
         "sessionOption": "AutoLoginOnly",
         "spm_cnt": "a21ybx.publish.0.0",
-        "spm_pre": "a21ybx.personal.sidebar.1.40206ac2UcXOCW",
-        "log_id": "40206ac2UcXOCW"
+        "spm_pre": "a21ybx.im.sidebar.1.29b04f10mWJ25H",
+        "log_id": "29b04f10mWJ25H"
     }
 
     headers = {

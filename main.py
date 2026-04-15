@@ -410,8 +410,14 @@ class XianyuLive:
             if not self.is_sync_package(message_data):
                 return
 
+            # 获取同步状态信息用于发送已读回执
+            sync_package = message_data["body"]["syncPushPackage"]
+            sync_pts = sync_package.get("pts", int(time.time() * 1000) * 1000)
+            sync_high_pts = sync_package.get("highPts", 0)
+            sync_seq = sync_package.get("seq", 0)
+
             # 获取并解密数据
-            sync_data = message_data["body"]["syncPushPackage"]["data"][0]
+            sync_data = sync_package["data"][0]
 
             # 检查是否有必要的字段
             if "data" not in sync_data:
@@ -423,8 +429,29 @@ class XianyuLive:
                 data = sync_data["data"]
                 try:
                     data = base64.b64decode(data).decode("utf-8")
-                    data = json.loads(data)
-                    # logger.info(f"无需解密 message: {data}")
+                    message = json.loads(data)
+                    logger.debug(f"消息无需解密: {message}")
+                    # 发送已读回执后返回（不需要解密的消息也是有效消息）
+                    try:
+                        original_mid = message_data.get("headers", {}).get("mid", generate_mid())
+                        read_ack = {
+                            "lwp": "/r/SyncStatus/ackDiff",
+                            "headers": {"mid": original_mid},
+                            "body": [{
+                                "pipeline": "sync",
+                                "tooLong2Tag": "PNM,1",
+                                "channel": "sync",
+                                "topic": "sync",
+                                "highPts": sync_high_pts,
+                                "pts": sync_pts,
+                                "seq": sync_seq,
+                                "timestamp": int(time.time() * 1000)
+                            }]
+                        }
+                        await websocket.send(json.dumps(read_ack))
+                        logger.debug(f"已发送已读回执 (pts: {sync_pts})")
+                    except Exception as e:
+                        logger.warning(f"发送已读回执失败: {e}")
                     return
                 except Exception as e:
                     # logger.info(f'加密数据: {data}')
@@ -433,6 +460,28 @@ class XianyuLive:
             except Exception as e:
                 logger.error(f"消息解密失败: {e}")
                 return
+
+            # 发送已读回执
+            try:
+                original_mid = message_data.get("headers", {}).get("mid", generate_mid())
+                read_ack = {
+                    "lwp": "/r/SyncStatus/ackDiff",
+                    "headers": {"mid": original_mid},
+                    "body": [{
+                        "pipeline": "sync",
+                        "tooLong2Tag": "PNM,1",
+                        "channel": "sync",
+                        "topic": "sync",
+                        "highPts": sync_high_pts,
+                        "pts": sync_pts,
+                        "seq": sync_seq,
+                        "timestamp": int(time.time() * 1000)
+                    }]
+                }
+                await websocket.send(json.dumps(read_ack))
+                logger.debug(f"已发送已读回执 (pts: {sync_pts})")
+            except Exception as e:
+                logger.warning(f"发送已读回执失败: {e}")
 
             try:
                 # 判断是否为订单消息,需要自行编写付款后的逻辑

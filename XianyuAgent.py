@@ -22,7 +22,7 @@ def is_ollama_available() -> bool:
 
 class XianyuReplyBot:
     def __init__(self):
-        self.use_local = os.getenv("USE_LOCAL_MODEL", "true").lower() == "true"
+        self.use_local = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"
         self.local_available = False
 
         # 本地 Ollama 客户端
@@ -70,9 +70,12 @@ class XianyuReplyBot:
                   max_tokens: int = 500, top_p: float = 0.8,
                   extra_body: Optional[dict] = None) -> str:
         """
-        调用大模型：本地优先，失败自动切远程
+        调用大模型：远程百炼优先，本地模型兜底
         """
-        use_remote = not self.local_available
+        # 远程优先，本地作为备用
+        use_remote = True
+        if self.use_local and self.local_available:
+            use_remote = False
 
         # 确定使用的客户端和模型
         if use_remote:
@@ -112,28 +115,23 @@ class XianyuReplyBot:
             return content
 
         except Exception as e:
-            error_str = str(e).lower()
-
-            # 本地调用失败，尝试远程兜底
-            if not use_remote and self.remote_client:
-                logger.warning(f"本地模型调用失败: {e}，自动切换到远程模型")
+            # 远程调用失败，尝试本地模型兜底
+            if use_remote and self.use_local and self.local_available:
+                logger.warning(f"远程模型调用失败: {e}，尝试切换到本地模型")
                 try:
                     kwargs = {
-                        "model": self.remote_model,
+                        "model": self.local_model,
                         "messages": messages,
                         "temperature": temperature,
                         "max_tokens": max_tokens,
-                        "top_p": top_p,
                     }
-                    if extra_body:
-                        kwargs["extra_body"] = extra_body
-                    response = self.remote_client.chat.completions.create(**kwargs)
+                    response = self.local_client.chat.completions.create(**kwargs)
                     content = response.choices[0].message.content
-                    logger.info("✅ 已切换到百炼远程模型")
+                    logger.info(f"✅ 已切换到本地模型 {self.local_model}")
                     return content
-                except Exception as remote_e:
-                    logger.error(f"远程模型调用也失败: {remote_e}")
-                    raise remote_e
+                except Exception as local_e:
+                    logger.error(f"本地模型调用也失败: {local_e}")
+                    raise local_e
 
             logger.error(f"LLM调用失败: {e}")
             raise

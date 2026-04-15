@@ -30,15 +30,19 @@ python main.py
 ```
 User Message → IntentRouter → ClassifyAgent / PriceAgent / TechAgent / DefaultAgent
 ```
+- **IntentRouter**: Three-tier routing - keyword/pattern matching first, then LLM-based ClassifyAgent for ambiguous cases
 - **ClassifyAgent**: LLM-based intent classification when rules don't match
-- **PriceAgent**: Bargaining scenarios (temperature increases with bargain_count)
-- **TechAgent**: Product technical questions (enables `enable_search` for remote models)
-- **DefaultAgent**: General customer service responses
+- **PriceAgent**: Bargaining scenarios (temperature increases with bargain_count, formula: `min(0.3 + count * 0.15, 0.9)`)
+- **TechAgent**: Product technical questions (enables `enable_search` for remote models only)
+- **DefaultAgent**: General customer service responses (temperature=0.7)
+
+Context is formatted via `format_history()` which extracts only `user` and `assistant` roles from the message history.
 
 ### Model Strategy
-- **Local first**: Uses Ollama if `USE_LOCAL_MODEL=True` and Ollama is available at `localhost:11434`
-- **Remote fallback**: Automatically switches to Bailian (百炼) API if local fails
+- **Remote first**: Uses Bailian (百炼) API by default
+- **Local fallback**: Uses Ollama if `USE_LOCAL_MODEL=True` and local is available, as a backup when remote fails
 - Remote models support `enable_search=True` for web search; local models do not
+- TechAgent automatically uses `enable_search=True` when running on remote models
 
 ### Context Management (context_manager.py)
 - SQLite database at `data/chat_history.db` stores:
@@ -71,7 +75,10 @@ Edit files in `prompts/` directory to customize agent behavior:
 - `tech_prompt.txt` - Technical questions
 - `default_prompt.txt` - General responses
 
-Rename from `*_example.txt` to `*.txt` to activate.
+The bot loads `{name}.txt` if it exists, otherwise falls back to `{name}_example.txt`. Create your custom files to override defaults.
+
+### Safety Filter
+All agent responses pass through a safety filter (`_safe_filter`) that blocks contact information (微信, QQ, 支付宝, 银行卡, 线下) and replaces them with a platform safety reminder.
 
 ### Auto-Listing (listing_bot.py)
 Product data is managed via Excel at `data/products.xlsx` with columns for status, cloud links (Baidu/Quark), delivery message templates, etc. Initialize with:
@@ -87,7 +94,7 @@ python listing_bot.py --init
 | `API_KEY` | Yes | - | Bailian API key |
 | `MODEL_BASE_URL` | No | dashscope URL | Remote model endpoint |
 | `MODEL_NAME` | No | qwen-max | Remote model name |
-| `USE_LOCAL_MODEL` | No | True | Enable local Ollama |
+| `USE_LOCAL_MODEL` | No | False | Enable local Ollama |
 | `LOCAL_MODEL_NAME` | No | qwen2.5:7b | Ollama model |
 | `TOGGLE_KEYWORDS` | No | 。 | Manual takeover trigger |
 | `SIMULATE_HUMAN_TYPING` | No | False | Add typing delay before reply |
@@ -105,3 +112,4 @@ items(item_id, data, price, description, last_updated)
 - Cookies expire and need periodic refresh; the app prompts for new cookies when `get_token` fails with风控 errors
 - The `listing_bot.py` module can run independently or be called from `main.py` for order automation
 - All timestamps in SQLite are stored in ISO format via `datetime.now().isoformat()`
+- Order automation (`do_confirm_and_relist`) runs in a background thread to avoid blocking message processing

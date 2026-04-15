@@ -322,9 +322,9 @@ class XianyuLive:
 
                     # 在后台线程执行上架
                     def relist_thread():
-                        from listing_bot import relist_with_playwright, load_config
+                        from listing_bot import try_relist, load_config
                         config = load_config()
-                        new_item_id = relist_with_playwright(product, config)
+                        new_item_id = try_relist(product, config)
 
                         if new_item_id:
                             from datetime import datetime

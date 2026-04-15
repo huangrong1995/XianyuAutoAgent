@@ -19,6 +19,7 @@ from datetime import datetime
 from threading import Thread
 
 import openpyxl
+import requests
 from dotenv import load_dotenv
 
 # 项目路径
@@ -26,6 +27,15 @@ PROJECT_DIR = Path(__file__).parent
 DATA_DIR = PROJECT_DIR / "data"
 STATE_FILE = DATA_DIR / "listing_state.json"
 PRODUCTS_EXCEL = DATA_DIR / "products.xlsx"
+
+
+def generate_sign(t: str, token: str, data: str) -> str:
+    """生成签名"""
+    app_key = "34839810"
+    msg = f"{token}&{t}&{app_key}&{data}"
+    md5_hash = hashlib.md5()
+    md5_hash.update(msg.encode('utf-8'))
+    return md5_hash.hexdigest()
 
 
 # ============ 配置加载 ============
@@ -274,7 +284,117 @@ def relist_with_playwright(product: dict, config: dict) -> str:
             print(f"   ❌ Playwright 上架失败: {e}")
         finally:
             browser.close()
-        
+
+        return ""
+
+
+def relist_with_api(product: dict, config: dict) -> str:
+    """使用 API 上架商品"""
+    session = requests.Session()
+
+    # 解析 cookies
+    for part in config["cookies_str"].split(";"):
+        part = part.strip()
+        if "=" in part:
+            name, value = part.split("=", 1)
+            session.cookies.set(name.strip(), value.strip(), domain=".goofish.com")
+
+    # 获取 token
+    token = session.cookies.get("_m_h5_tk", "").split("_")[0]
+    if not token:
+        print("   ❌ 无法获取 token")
+        return ""
+
+    t = str(int(time.time() * 1000))
+
+    # 构建请求数据
+    item_data = {
+        "title": product.get("title", ""),
+        "price": product.get("price", "0"),
+        "description": product.get("desc", ""),
+        "category": product.get("category", "other"),
+        "tags": product.get("tags", "").split(",") if product.get("tags") else [],
+        " images": [],  # 图片需要额外上传
+    }
+
+    data_val = json.dumps(item_data, ensure_ascii=False)
+
+    # 生成签名
+    sign = generate_sign(t, token, data_val)
+
+    # 构建请求
+    params = {
+        "jsv": "2.7.2",
+        "appKey": "34839810",
+        "t": t,
+        "sign": sign,
+        "v": "1.0",
+        "type": "originaljson",
+        "accountSite": "xianyu",
+        "dataType": "json",
+        "timeout": "20000",
+        "api": "mtop.idle.pc.idleitem.publish",
+        "sessionOption": "AutoLoginOnly",
+        "spm_cnt": "a21ybx.publish.0.0",
+        "spm_pre": "a21ybx.personal.sidebar.1.40206ac2UcXOCW",
+        "log_id": "40206ac2UcXOCW"
+    }
+
+    headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        "referer": "https://www.goofish.com/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    }
+
+    try:
+        response = session.post(
+            "https://h5api.m.goofish.com/h5/mtop.idle.pc.idleitem.publish/1.0/",
+            params=params,
+            data={"data": data_val},
+            headers=headers,
+            timeout=30
+        )
+
+        result = response.json()
+        print(f"   📦 上架响应: {result}")
+
+        ret = result.get("ret", [None])
+        if ret and any("SUCCESS" in str(r) for r in ret):
+            # 尝试从响应中提取商品ID
+            data = result.get("data", {})
+            if isinstance(data, dict):
+                item_id = data.get("itemId") or data.get("item_id") or data.get("idleId")
+                if item_id:
+                    print(f"   ✅ 上架成功: {item_id}")
+                    return str(item_id)
+            # 如果没有解析到itemId但返回成功，也返回成功
+            print(f"   ✅ 上架API调用成功")
+            return "success"
+        else:
+            print(f"   ❌ 上架失败: {result}")
+            return ""
+
+    except Exception as e:
+        print(f"   ❌ 上架API异常: {e}")
+        return ""
+
+
+def try_relist(product: dict, config: dict) -> str:
+    """尝试上架商品，优先使用API方式"""
+    # 优先使用API方式
+    print(f"   🔄 尝试API方式上架...")
+    result = relist_with_api(product, config)
+    if result:
+        return result
+
+    # API方式失败，尝试Playwright
+    print(f"   🔄 API方式失败，尝试Playwright方式...")
+    try:
+        from playwright.sync_api import sync_playwright
+        result = relist_with_playwright(product, config)
+        return result
+    except ImportError:
+        print(f"   ⚠️  Playwright未安装")
         return ""
 
 

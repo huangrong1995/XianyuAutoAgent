@@ -39,6 +39,87 @@ def generate_sign(t: str, token: str, data: str) -> str:
     return md5_hash.hexdigest()
 
 
+def upload_image(image_path: str, config: dict) -> str:
+    """上传图片到闲鱼CDN，返回图片URL"""
+    if not image_path or not os.path.exists(image_path):
+        return None
+
+    session = requests.Session()
+    for part in config["cookies_str"].split(";"):
+        part = part.strip()
+        if "=" in part:
+            name, value = part.split("=", 1)
+            session.cookies.set(name.strip(), value.strip(), domain=".goofish.com")
+
+    try:
+        with open(image_path, "rb") as f:
+            files = {"file": (os.path.basename(image_path), f, "image/jpeg")}
+            data = {
+                "folderId": "0",
+                "appkey": "fleamarket",
+                "_input_charset": "utf-8"
+            }
+            response = session.post(
+                "https://stream-upload.goofish.com/api/upload.api",
+                files=files,
+                data=data,
+                timeout=30
+            )
+
+        result = response.text
+        print(f"   📤 图片上传响应: {result}")
+
+        # 解析响应获取URL
+        try:
+            resp_json = json.loads(result)
+            # 尝试从响应中提取图片URL
+            if isinstance(resp_json, dict):
+                url = resp_json.get("url") or resp_json.get("data", {}).get("url") or resp_json.get("data", {}).get("imgUrl")
+                if url:
+                    return url
+            # 如果响应就是URL字符串
+            if result.startswith("http"):
+                return result
+        except:
+            pass
+
+        print(f"   ⚠️ 图片上传解析失败")
+        return None
+
+    except Exception as e:
+        print(f"   ❌ 图片上传异常: {e}")
+        return None
+
+
+def upload_images_from_folder(img_folder: str, config: dict) -> list:
+    """从文件夹上传多张图片，返回URL列表"""
+    img_dir = PROJECT_DIR / img_folder if img_folder else None
+    if not img_dir or not img_dir.exists():
+        return []
+
+    img_files = list(img_dir.glob("*.*"))
+    if not img_files:
+        return []
+
+    urls = []
+    for img_file in img_files[:9]:  # 最多9张
+        url = upload_image(str(img_file), config)
+        if url:
+            urls.append({
+                "extraInfo": {"isH": "false", "isT": "false", "raw": "false"},
+                "isQrCode": False,
+                "url": url,
+                "heightSize": 1024,
+                "widthSize": 1024,
+                "major": len(urls) == 0,  # 第一张设为主图
+                "type": 0,
+                "status": "done"
+            })
+        time.sleep(0.5)  # 避免上传过快
+
+    return urls
+
+
 # ============ 配置加载 ============
 
 def load_config():
@@ -308,6 +389,20 @@ def relist_with_api(product: dict, config: dict) -> str:
 
     t = str(int(time.time() * 1000))
 
+    # 上传图片
+    img_urls = []
+    img_folder = product.get("img_folder", "")
+    if img_folder:
+        print(f"   📤 开始上传图片...")
+        img_urls = upload_images_from_folder(img_folder, config)
+        print(f"   📤 图片上传完成，共 {len(img_urls)} 张")
+
+    # 如果没有上传图片，使用默认图片
+    if not img_urls:
+        # 使用一个占位图片URL（需要有效的已上传图片）
+        print(f"   ⚠️ 没有可用图片，尝试不传图片上架...")
+        img_urls = []
+
     # 构建请求数据（根据抓包结果）
     price = product.get("price", "0")
     price_in_cent = str(int(float(price) * 100)) if price else "1000"
@@ -317,7 +412,7 @@ def relist_with_api(product: dict, config: dict) -> str:
         "itemTypeStr": "b",
         "quantity": "1",
         "simpleItem": "true",
-        "imageInfoDOList": [],  # 暂时留空，需要图片上传
+        "imageInfoDOList": img_urls,
         "itemTextDTO": {
             "desc": product.get("desc", "NA"),
             "title": product.get("title", "NA"),

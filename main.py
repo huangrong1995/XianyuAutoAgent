@@ -10,7 +10,7 @@ from XianyuApis import XianyuApis
 import sys
 import random
 import threading
-from listing_bot import get_delivery_message_for_product, load_products, PRODUCTS_EXCEL, do_confirm_and_relist
+from listing_bot import get_delivery_message_for_product, load_products, PRODUCTS_EXCEL, do_confirm_and_relist, update_product
 
 
 from utils.xianyu_utils import generate_mid, generate_uuid, trans_cookies, generate_device_id, decrypt
@@ -189,6 +189,9 @@ class XianyuLive:
         await ws.send(json.dumps(msg))
         logger.info('连接注册完成')
 
+        # 启动时自动上架待发布的商品
+        self.auto_relist_pending_products()
+
     def is_chat_message(self, message):
         """判断是否为用户聊天消息"""
         try:
@@ -300,6 +303,49 @@ class XianyuLive:
         else:
             self.enter_manual_mode(chat_id)
             return "manual"
+
+    def auto_relist_pending_products(self):
+        """启动时自动上架待发布的商品"""
+        try:
+            products = load_products(PRODUCTS_EXCEL)
+            pending_products = [p for p in products if p.get("status") == "待上架"]
+
+            if not pending_products:
+                logger.info("没有待上架的商品")
+                return
+
+            logger.info(f"发现 {len(pending_products)} 个待上架商品，开始自动上架...")
+
+            for product in pending_products:
+                try:
+                    logger.info(f"📦 正在上架: {product.get('title', '未知商品')}")
+
+                    # 在后台线程执行上架
+                    def relist_thread():
+                        from listing_bot import relist_with_playwright, load_config
+                        config = load_config()
+                        new_item_id = relist_with_playwright(product, config)
+
+                        if new_item_id:
+                            from datetime import datetime
+                            update_product(PRODUCTS_EXCEL, product["row"], {
+                                "status": "已上架",
+                                "item_id": new_item_id,
+                                "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            logger.info(f"✅ 上架成功: {product.get('title')} -> {new_item_id}")
+                        else:
+                            logger.warning(f"⚠️ 上架失败: {product.get('title')}")
+
+                    threading.Thread(target=relist_thread, daemon=True).start()
+                    # 间隔5秒上架，避免并发过快
+                    time.sleep(5)
+
+                except Exception as e:
+                    logger.error(f"上架商品失败: {e}")
+
+        except Exception as e:
+            logger.error(f"自动上架失败: {e}")
 
     def _auto_relist_thread(self, item_id, buyer_id):
         """后台线程：自动发货+重新上架"""
@@ -485,17 +531,17 @@ class XianyuLive:
 
             try:
                 # 判断是否为订单消息,需要自行编写付款后的逻辑
-                if message['3']['redReminder'] == '等待买家付款':
+                if isinstance(message.get('3'), dict) and message['3'].get('redReminder') == '等待买家付款':
                     user_id = message['1'].split('@')[0]
                     user_url = f'https://www.goofish.com/personal?userId={user_id}'
                     logger.info(f'等待买家 {user_url} 付款')
                     return
-                elif message['3']['redReminder'] == '交易关闭':
+                elif isinstance(message.get('3'), dict) and message['3'].get('redReminder') == '交易关闭':
                     user_id = message['1'].split('@')[0]
                     user_url = f'https://www.goofish.com/personal?userId={user_id}'
                     logger.info(f'买家 {user_url} 交易关闭')
                     return
-                elif message['3']['redReminder'] == '等待卖家发货':
+                elif isinstance(message.get('3'), dict) and message['3'].get('redReminder') == '等待卖家发货':
                     user_id = message['1'].split('@')[0]
                     user_url = f'https://www.goofish.com/personal?userId={user_id}'
                     logger.info(f'交易成功 {user_url} 等待卖家发货')

@@ -56,8 +56,8 @@ COPY prompts/price_prompt_example.txt prompts/price_prompt.txt
 COPY prompts/tech_prompt_example.txt prompts/tech_prompt.txt
 COPY prompts/default_prompt_example.txt prompts/default_prompt.txt
 
-# 只复制绝对必要的文件
-COPY main.py XianyuAgent.py XianyuApis.py context_manager.py ./
+# 复制所有必要的Python文件
+COPY main.py XianyuAgent.py XianyuApis.py context_manager.py listing_bot.py ./
 COPY utils/ utils/
 
 # 容器启动时运行的命令

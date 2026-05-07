@@ -312,34 +312,78 @@ def confirm_delivery(cookies: list, item_id: str, buyer_id: str) -> bool:
 def relist_with_playwright(product: dict, config: dict) -> str:
     """使用 Playwright 模拟浏览器上架"""
     from playwright.sync_api import sync_playwright
-    
+    try:
+        from stealth import stealth_js
+    except ImportError:
+        stealth_js = None
+
     cookies = parse_cookies(config["cookies_str"])
-    
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True, args=[
+            '--disable-blink-features=AutomationControlled',
+            '--disable-infobars',
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+        ])
         context = browser.new_context(
             viewport={"width": 1280, "height": 800},
-            cookies=cookies
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
+        # 应用 stealth 插件隐藏自动化特征
+        if stealth_js:
+            context.add_init_script(stealth_js)
+        context.add_cookies(cookies)
         page = context.new_page()
-        
+
         try:
-            page.goto("https://www.goofish.com/publish.htm", timeout=30000)
-            page.wait_for_load_state("networkidle")
-            time.sleep(2)
-            
-            # 填写标题
-            page.fill('input[placeholder*="标题"],input[name="title"]', product["title"])
-            time.sleep(0.5)
-            
-            # 填写价格
-            page.fill('input[placeholder*="价格"],input[name="price"]', product["price"])
-            time.sleep(0.5)
-            
-            # 填写描述
-            page.fill('textarea[placeholder*="描述"],textarea[name="description"]', product["desc"])
-            time.sleep(0.5)
-            
+            print(f"   🌐 正在打开发布页面...")
+            page.goto("https://www.goofish.com/publish", timeout=60000)
+            page.wait_for_load_state("domcontentloaded")
+            time.sleep(3)  # 等待JS执行
+
+            # 点击"新发布"标签（如果存在）
+            new_publish_tab = page.query_selector('div:has-text("新发布")')
+            if new_publish_tab:
+                new_publish_tab.click()
+                print(f"   📋 点击了新发布标签")
+                time.sleep(2)
+
+            # 保存截图用于调试
+            page.screenshot(path="/tmp/playwright_debug.png")
+            print(f"   📸 页面已截图保存")
+
+            # 打印页面标题和URL
+            print(f"   📄 页面标题: {page.title()}")
+            print(f"   🔗 当前URL: {page.url}")
+
+            # 查找第一个非file类型的text input（通常是标题）
+            all_inputs = page.query_selector_all('input[type="text"]')
+            print(f"   🔍 找到 {len(all_inputs)} 个文本输入框")
+
+            # 尝试填写标题（第一个有placeholder或第一个文本框）
+            title_filled = False
+            for inp in all_inputs:
+                ph = inp.get_attribute('placeholder')
+                if ph and ('0.00' not in ph):  # 跳过价格输入框
+                    inp.fill(product["title"])
+                    print(f"   ✏️ 标题已填写: {ph}")
+                    title_filled = True
+                    break
+
+            if not title_filled and all_inputs:
+                # 如果没找到有placeholder的，用第一个
+                all_inputs[0].fill(product["title"])
+                print(f"   ✏️ 标题已填写（第一个输入框）")
+
+            # 填写价格（找placeholder=0.00的）
+            for inp in all_inputs:
+                ph = inp.get_attribute('placeholder')
+                if ph == '0.00':
+                    inp.fill(str(product["price"]))
+                    print(f"   ✏️ 价格已填写: {product['price']}")
+                    break
+
             # 上传图片
             if product["img_folder"]:
                 img_dir = PROJECT_DIR / product["img_folder"]
@@ -349,21 +393,34 @@ def relist_with_playwright(product: dict, config: dict) -> str:
                         file_input = page.query_selector('input[type="file"]')
                         if file_input:
                             file_input.set_input_files([str(f) for f in img_files[:9]])
-                        time.sleep(2)
-            
-            # 发布
-            page.click('button:has-text("发布"),button:has-text("确认")')
-            time.sleep(3)
-            
+                            print(f"   📷 图片已上传: {len(img_files[:9])}张")
+                            time.sleep(2)
+
+            # 点击发布
+            publish_btn = page.query_selector('button:has-text("发布")') or \
+                         page.query_selector('button:has-text("确认")') or \
+                         page.query_selector('button[type="submit"]')
+            if publish_btn:
+                publish_btn.click()
+                print(f"   🔘 已点击发布按钮")
+                time.sleep(5)
+
             # 获取新商品ID
             url = page.url
             if "itemId=" in url:
                 item_id = url.split("itemId=")[1].split("&")[0]
                 print(f"   ✅ 上架成功: {item_id}")
                 return item_id
-            
+            else:
+                print(f"   ⚠️ 未找到商品ID，当前URL: {url}")
+
         except Exception as e:
             print(f"   ❌ Playwright 上架失败: {e}")
+            try:
+                page.screenshot(path="/tmp/playwright_error.png")
+                print(f"   📸 错误页面已截图")
+            except:
+                pass
         finally:
             browser.close()
 

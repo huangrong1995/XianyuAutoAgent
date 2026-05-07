@@ -8,6 +8,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./prompts:/app/prompts
+      - ./images:/app/images
       - ./.env:/app/.env
     environment:
       - TZ=Asia/Shanghai

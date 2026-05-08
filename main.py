@@ -10,7 +10,7 @@ from XianyuApis import XianyuApis
 import sys
 import random
 import threading
-from listing_bot import get_delivery_message_for_product, load_products, PRODUCTS_EXCEL, do_confirm_and_relist, update_product, try_relist, load_config
+from listing_bot import get_delivery_message_for_product, load_products, PRODUCTS_EXCEL, do_confirm_and_relist, update_product
 
 
 from utils.xianyu_utils import generate_mid, generate_uuid, trans_cookies, generate_device_id, decrypt
@@ -106,37 +106,6 @@ class XianyuLive:
 
                 # 每分钟检查一次
                 await asyncio.sleep(60)
-
-    async def pending_products_check_loop(self):
-        """定期检查待上架商品"""
-        check_interval = int(os.getenv("PENDING_CHECK_INTERVAL", "600"))  # 默认10分钟
-        while True:
-            try:
-                await asyncio.sleep(check_interval)
-                from listing_bot import load_products, PRODUCTS_EXCEL, try_relist, load_config
-                products = load_products(PRODUCTS_EXCEL)
-                pending_products = [p for p in products if p.get("status") == "待上架"]
-
-                if pending_products:
-                    logger.info(f"发现 {len(pending_products)} 个待上架商品，开始自动上架...")
-                    for product in pending_products:
-                        def relist_thread():
-                            from datetime import datetime
-                            config = load_config()
-                            new_item_id = try_relist(product, config)
-                            if new_item_id:
-                                update_product(PRODUCTS_EXCEL, product["row"], {
-                                    "status": "已上架",
-                                    "item_id": new_item_id,
-                                    "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                })
-                                logger.info(f"✅ 上架成功: {product.get('title')} -> {new_item_id}")
-                            else:
-                                logger.warning(f"⚠️ 上架失败: {product.get('title')}")
-                        threading.Thread(target=relist_thread, daemon=True).start()
-                        time.sleep(5)
-            except Exception as e:
-                logger.error(f"检查待上架商品失败: {e}")
 
             except Exception as e:
                 logger.error(f"Token刷新循环出错: {e}")
@@ -353,9 +322,9 @@ class XianyuLive:
 
                     # 在后台线程执行上架
                     def relist_thread():
-                        from listing_bot import try_relist, load_config
+                        from listing_bot import relist_with_playwright, load_config
                         config = load_config()
-                        new_item_id = try_relist(product, config)
+                        new_item_id = relist_with_playwright(product, config)
 
                         if new_item_id:
                             from datetime import datetime
@@ -579,13 +548,13 @@ class XianyuLive:
                     # 自动发货+发链接(数字资料)
                     try:
                         # 获取会话ID用于发消息
-                        chat_id = message["1"].split('@')[0]
-                        url_info = message["3"]["reminderUrl"]
+                        chat_id = message["1"]["2"].split('@')[0]
+                        url_info = message["1"]["10"]["reminderUrl"]
                         item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
-
+                        
                         # 获取发货消息
                         delivery_msg = get_delivery_message_for_product(item_id)
-
+                        
                         # 在后台线程执行发货+上架（不阻塞消息处理）
                         def background_task():
                             products = load_products(PRODUCTS_EXCEL)
@@ -603,53 +572,16 @@ class XianyuLive:
                                 do_confirm_and_relist(item_id, user_id, target, chat_id)
                             else:
                                 logger.warning(f'未找到商品 {item_id} 的配置')
-
+                        
                         threading.Thread(target=background_task, daemon=True).start()
-
+                        
                         # 立即发送云盘链接给买家（如果有）
                         if delivery_msg and websocket:
                             await self.send_msg(websocket, chat_id, user_id, delivery_msg)
                             logger.info(f'已发送发货消息给买家 {user_id}')
-
+                        
                     except Exception as e:
                         logger.error(f'自动发货/发送链接失败: {e}')
-                    return
-                elif isinstance(message.get('3'), dict) and message['3'].get('redReminder') == '交易成功':
-                    # 交易成功，等待发货状态（有些情况下不显示"等待卖家发货"）
-                    user_id = message['1'].split('@')[0]
-                    logger.info(f'交易成功，等待发货 {user_id}')
-                    # 同样触发自动发货流程
-                    try:
-                        chat_id = message["1"].split('@')[0]
-                        url_info = message["3"].get("reminderUrl", "")
-                        item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
-                        if not item_id:
-                            # 尝试从message获取item_id
-                            if isinstance(message.get('1'), dict):
-                                item_id = message["1"].get("10", {}).get("itemId") if isinstance(message["1"].get("10"), dict) else None
-                        if item_id:
-                            delivery_msg = get_delivery_message_for_product(item_id)
-                            def background_task():
-                                products = load_products(PRODUCTS_EXCEL)
-                                target = None
-                                for p in products:
-                                    if p.get("item_id") == item_id:
-                                        target = p
-                                        break
-                                if not target:
-                                    for p in products:
-                                        if p.get("status") == "待上架":
-                                            target = p
-                                            break
-                                if target:
-                                    do_confirm_and_relist(item_id, user_id, target, chat_id)
-                                else:
-                                    logger.warning(f'未找到商品 {item_id} 的配置')
-                            threading.Thread(target=background_task, daemon=True).start()
-                            if delivery_msg and websocket:
-                                await self.send_msg(websocket, chat_id, user_id, delivery_msg)
-                    except Exception as e:
-                        logger.error(f'交易成功自动发货失败: {e}')
                     return
 
             except:
@@ -867,9 +799,6 @@ class XianyuLive:
 
                     # 启动token刷新任务
                     self.token_refresh_task = asyncio.create_task(self.token_refresh_loop())
-
-                    # 启动待上架商品检查任务
-                    self.pending_check_task = asyncio.create_task(self.pending_products_check_loop())
 
                     async for message in websocket:
                         try:

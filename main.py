@@ -111,6 +111,37 @@ class XianyuLive:
                 logger.error(f"Token刷新循环出错: {e}")
                 await asyncio.sleep(60)
 
+    async def pending_products_check_loop(self):
+        """定期检查待上架商品"""
+        from listing_bot import load_products, PRODUCTS_EXCEL, try_relist, load_config, update_product
+        check_interval = int(os.getenv("PENDING_CHECK_INTERVAL", "600"))  # 默认10分钟
+        while True:
+            try:
+                await asyncio.sleep(check_interval)
+                products = load_products(PRODUCTS_EXCEL)
+                pending_products = [p for p in products if p.get("status") == "待上架"]
+
+                if pending_products:
+                    logger.info(f"发现 {len(pending_products)} 个待上架商品，开始自动上架...")
+                    for product in pending_products:
+                        def relist_thread():
+                            from datetime import datetime
+                            config = load_config()
+                            new_item_id = try_relist(product, config)
+                            if new_item_id:
+                                update_product(PRODUCTS_EXCEL, product["row"], {
+                                    "status": "已上架",
+                                    "item_id": new_item_id,
+                                    "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                })
+                                logger.info(f"✅ 上架成功: {product.get('title')} -> {new_item_id}")
+                            else:
+                                logger.warning(f"⚠️ 上架失败: {product.get('title')}")
+                        threading.Thread(target=relist_thread, daemon=True).start()
+                        time.sleep(5)
+            except Exception as e:
+                logger.error(f"检查待上架商品失败: {e}")
+
     async def send_msg(self, ws, cid, toid, text):
         text = {
             "contentType": 1,
@@ -799,6 +830,9 @@ class XianyuLive:
 
                     # 启动token刷新任务
                     self.token_refresh_task = asyncio.create_task(self.token_refresh_loop())
+
+                    # 启动待上架商品检查任务
+                    self.pending_check_task = asyncio.create_task(self.pending_products_check_loop())
 
                     async for message in websocket:
                         try:

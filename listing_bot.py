@@ -414,19 +414,20 @@ def relist_with_playwright(product: dict, config: dict) -> str:
 
     try:
         print(f"   🌐 正在访问主页...")
+        # 先访问主站建立域名上下文
         driver.get("https://www.goofish.com")
         time.sleep(5)
 
-        # 从.env读取的cookies可能已过期，先尝试添加
+        # 添加cookies
         cookies = parse_cookies(config["cookies_str"])
         for cookie in cookies:
             try:
                 driver.add_cookie(cookie)
-            except:
-                pass
+            except Exception as e:
+                pass  # 静默忽略失败
 
         # 刷新页面让cookies生效
-        driver.get("https://www.goofish.com")
+        driver.refresh()
         time.sleep(5)
         
         # 检查登录弹窗
@@ -438,7 +439,7 @@ def relist_with_playwright(product: dict, config: dict) -> str:
 
         print(f"   🌐 正在打开发布页面...")
         driver.get("https://www.goofish.com/publish")
-        time.sleep(3)
+        time.sleep(5)
 
         wait = WebDriverWait(driver, 15)
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[contenteditable="true"]')))

@@ -548,8 +548,8 @@ class XianyuLive:
                     # 自动发货+发链接(数字资料)
                     try:
                         # 获取会话ID用于发消息
-                        chat_id = message["1"]["2"].split('@')[0]
-                        url_info = message["1"]["10"]["reminderUrl"]
+                        chat_id = message["1"].split('@')[0]
+                        url_info = message["3"]["reminderUrl"]
                         item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
                         
                         # 获取发货消息

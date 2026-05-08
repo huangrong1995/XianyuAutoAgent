@@ -270,6 +270,24 @@ def parse_cookies(cookie_str: str) -> list:
     return cookies
 
 
+def save_cookies_to_env(new_cookies_str: str, env_path: str = "/app/.env"):
+    """保存新cookies到.env文件"""
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        with open(env_path, 'w', encoding='utf-8') as f:
+            for line in lines:
+                if line.startswith('COOKIES_STR='):
+                    f.write(f'COOKIES_STR={new_cookies_str}\n')
+                else:
+                    f.write(line)
+        
+        print(f"   💾 Cookies已保存到.env")
+    except Exception as e:
+        print(f"   ⚠️ 保存Cookies失败: {e}")
+
+
 # ============ 闲鱼 API 操作 ============
 
 def confirm_delivery(cookies: list, item_id: str, buyer_id: str) -> bool:
@@ -310,121 +328,204 @@ def confirm_delivery(cookies: list, item_id: str, buyer_id: str) -> bool:
 
 
 def relist_with_playwright(product: dict, config: dict) -> str:
-    """使用 Playwright 模拟浏览器上架"""
-    from playwright.sync_api import sync_playwright
-    try:
-        from stealth import stealth_js
-    except ImportError:
-        stealth_js = None
+    """使用 Selenium WebDriver 连接真实浏览器上架"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    import os
 
+    selenium_url = os.getenv("SELENIUM_URL", "http://selenium:4444")
     cookies = parse_cookies(config["cookies_str"])
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=[
-            '--disable-blink-features=AutomationControlled',
-            '--disable-infobars',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-        ])
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    try:
+        options = Options()
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+
+        driver = webdriver.Remote(
+            command_executor=selenium_url + "/wd/hub",
+            options=options
         )
-        # 应用 stealth 插件隐藏自动化特征
-        if stealth_js:
-            context.add_init_script(stealth_js)
-        context.add_cookies(cookies)
-        page = context.new_page()
+        print(f"   🔗 已连接 Selenium Grid")
+    except Exception as e:
+        print(f"   ⚠️ Selenium连接失败: {e}")
+        return ""
 
+    def get_login_modal():
+        """检测登录弹窗"""
+        # 只检查 passport iframe 是否显示登录界面
         try:
-            print(f"   🌐 正在打开发布页面...")
-            page.goto("https://www.goofish.com/publish", timeout=60000)
-            page.wait_for_load_state("domcontentloaded")
-            time.sleep(3)  # 等待JS执行
+            iframes = driver.find_elements(By.TAG_NAME, 'iframe')
+            for iframe in iframes:
+                src = iframe.get_attribute('src') or ''
+                if 'passport' in src and iframe.is_displayed():
+                    # 检查iframe是否包含扫码登录内容（不是已登录状态）
+                    driver.switch_to.frame(iframe)
+                    try:
+                        # 查找QR code canvas或扫码登录相关的元素
+                        qr_canvas = driver.find_elements(By.CSS_SELECTOR, 'canvas, [class*="qrcode"], [class*="QRCode"]')
+                        for elem in qr_canvas:
+                            if elem.is_displayed():
+                                driver.switch_to.default_content()
+                                return iframe
+                    except:
+                        pass
+                    driver.switch_to.default_content()
+        except:
+            driver.switch_to.default_content()
+        return None
 
-            # 点击"新发布"标签（如果存在）
-            new_publish_tab = page.query_selector('div:has-text("新发布")')
-            if new_publish_tab:
-                new_publish_tab.click()
-                print(f"   📋 点击了新发布标签")
-                time.sleep(2)
+    def wait_for_login():
+        """等待用户扫码登录，返回是否成功并更新cookie"""
+        print(f"   ⚠️ 检测到登录验证，等待扫码...")
+        driver.save_screenshot("/tmp/login_required.png")
+        print(f"   📸 登录弹窗已截图，请扫码登录...")
 
-            # 保存截图用于调试
-            page.screenshot(path="/tmp/playwright_debug.png")
-            print(f"   📸 页面已截图保存")
-
-            # 打印页面标题和URL
-            print(f"   📄 页面标题: {page.title()}")
-            print(f"   🔗 当前URL: {page.url}")
-
-            # 查找第一个非file类型的text input（通常是标题）
-            all_inputs = page.query_selector_all('input[type="text"]')
-            print(f"   🔍 找到 {len(all_inputs)} 个文本输入框")
-
-            # 尝试填写标题（第一个有placeholder或第一个文本框）
-            title_filled = False
-            for inp in all_inputs:
-                ph = inp.get_attribute('placeholder')
-                if ph and ('0.00' not in ph):  # 跳过价格输入框
-                    inp.fill(product["title"])
-                    print(f"   ✏️ 标题已填写: {ph}")
-                    title_filled = True
-                    break
-
-            if not title_filled and all_inputs:
-                # 如果没找到有placeholder的，用第一个
-                all_inputs[0].fill(product["title"])
-                print(f"   ✏️ 标题已填写（第一个输入框）")
-
-            # 填写价格（找placeholder=0.00的）
-            for inp in all_inputs:
-                ph = inp.get_attribute('placeholder')
-                if ph == '0.00':
-                    inp.fill(str(product["price"]))
-                    print(f"   ✏️ 价格已填写: {product['price']}")
-                    break
-
-            # 上传图片
-            if product["img_folder"]:
-                img_dir = PROJECT_DIR / product["img_folder"]
-                if img_dir.exists():
-                    img_files = list(img_dir.glob("*.*"))
-                    if img_files:
-                        file_input = page.query_selector('input[type="file"]')
-                        if file_input:
-                            file_input.set_input_files([str(f) for f in img_files[:9]])
-                            print(f"   📷 图片已上传: {len(img_files[:9])}张")
-                            time.sleep(2)
-
-            # 点击发布
-            publish_btn = page.query_selector('button:has-text("发布")') or \
-                         page.query_selector('button:has-text("确认")') or \
-                         page.query_selector('button[type="submit"]')
-            if publish_btn:
-                publish_btn.click()
-                print(f"   🔘 已点击发布按钮")
-                time.sleep(5)
-
-            # 获取新商品ID
-            url = page.url
-            if "itemId=" in url:
-                item_id = url.split("itemId=")[1].split("&")[0]
-                print(f"   ✅ 上架成功: {item_id}")
-                return item_id
-            else:
-                print(f"   ⚠️ 未找到商品ID，当前URL: {url}")
-
-        except Exception as e:
-            print(f"   ❌ Playwright 上架失败: {e}")
+        for i in range(60):
+            time.sleep(1)
             try:
-                page.screenshot(path="/tmp/playwright_error.png")
-                print(f"   📸 错误页面已截图")
+                # 检查passport iframe是否消失
+                passport_iframe_visible = False
+                iframes = driver.find_elements(By.TAG_NAME, 'iframe')
+                for iframe in iframes:
+                    src = iframe.get_attribute('src') or ''
+                    if 'passport' in src and iframe.is_displayed():
+                        passport_iframe_visible = True
+                        break
+                
+                if not passport_iframe_visible:
+                    # 获取新cookies
+                    print(f"   ✅ 登录成功，正在获取新Cookie...")
+                    new_cookies_list = driver.get_cookies()
+                    new_cookies_str = "; ".join([f"{c['name']}={c['value']}" for c in new_cookies_list])
+                    config["cookies_str"] = new_cookies_str
+                    # 保存到 .env 文件
+                    save_cookies_to_env(new_cookies_str)
+                    return True
+            except Exception as e:
+                print(f"   ⚠️ 检查登录状态时出错: {e}")
+            if (i + 1) % 10 == 0:
+                print(f"   ⏳ 等待扫码中... ({i + 1}秒)")
+
+        return False
+
+    try:
+        print(f"   🌐 正在访问主页...")
+        driver.get("https://www.goofish.com")
+        time.sleep(5)
+
+        # 从.env读取的cookies可能已过期，先尝试添加
+        cookies = parse_cookies(config["cookies_str"])
+        for cookie in cookies:
+            try:
+                driver.add_cookie(cookie)
             except:
                 pass
-        finally:
-            browser.close()
 
-        return ""
+        # 刷新页面让cookies生效
+        driver.get("https://www.goofish.com")
+        time.sleep(5)
+        
+        # 检查登录弹窗
+        if get_login_modal():
+            if not wait_for_login():
+                print(f"   ❌ 登录超时")
+                driver.quit()
+                return ""
+
+        print(f"   🌐 正在打开发布页面...")
+        driver.get("https://www.goofish.com/publish")
+        time.sleep(3)
+
+        wait = WebDriverWait(driver, 15)
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[contenteditable="true"]')))
+        print(f"   📄 页面已加载: {driver.title}")
+
+        try:
+            editor = driver.find_element(By.CSS_SELECTOR, 'div[contenteditable="true"]')
+            editor.click()
+            time.sleep(0.5)
+            editor.send_keys(product["title"])
+            # 触发 input 事件确保 React/Vue 检测到输入
+            driver.execute_script('arguments[0].dispatchEvent(new Event("input", {bubbles: true}));', editor)
+            print(f"   ✏️ 标题已填写")
+        except Exception as e:
+            print(f"   ⚠️ 标题填写失败: {e}")
+
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[placeholder="0.00"]')))
+        try:
+            price_input = driver.find_element(By.CSS_SELECTOR, 'input[placeholder="0.00"]')
+            price_input.click()
+            time.sleep(0.3)
+            price_input.send_keys(str(product["price"]))
+            # 触发 input 事件
+            driver.execute_script('arguments[0].dispatchEvent(new Event("input", {bubbles: true}));', price_input)
+            print(f"   ✏️ 价格已填写: {product['price']}")
+        except Exception as e:
+            print(f"   ⚠️ 价格填写失败: {e}")
+
+        if product.get("img_folder"):
+            img_dir = PROJECT_DIR / product["img_folder"]
+            if img_dir.exists():
+                img_files = list(img_dir.glob("*.*"))
+                if img_files:
+                    try:
+                        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"]')))
+                        file_input = driver.find_element(By.CSS_SELECTOR, 'input[type="file"]')
+                        file_input.send_keys(str(img_files[0]))
+                        print(f"   📷 图片已上传")
+                        time.sleep(5)
+                    except Exception as e:
+                        print(f"   ⚠️ 图片上传失败: {e}")
+
+        if get_login_modal():
+            if not wait_for_login():
+                print(f"   ❌ 登录超时")
+                driver.quit()
+                return ""
+
+        try:
+            wait.until(EC.presence_of_element_located((By.XPATH, '//button[contains(.,"发布")]')))
+            publish_btn = driver.find_element(By.XPATH, '//button[contains(.,"发布")]')
+            print(f"   🔘 找到发布按钮")
+            # 等待一下让页面稳定
+            time.sleep(2)
+            publish_btn.click()
+            print(f"   🔘 已点击发布按钮，等待响应...")
+            time.sleep(10)
+        except Exception as e:
+            print(f"   ⚠️ 发布按钮点击失败: {e}")
+
+        url = driver.current_url
+        print(f"   🔗 发布后URL: {url}")
+        # 检查 item?id= 或 itemId=
+        if "item?id=" in url:
+            item_id = url.split("item?id=")[1].split("&")[0]
+            print(f"   ✅ 上架成功: {item_id}")
+            return item_id
+        elif "itemId=" in url:
+            item_id = url.split("itemId=")[1].split("&")[0]
+            print(f"   ✅ 上架成功: {item_id}")
+            return item_id
+        else:
+            print(f"   ⚠️ 未找到商品ID，当前URL: {url}")
+
+    except Exception as e:
+        print(f"   ❌ Selenium 上架失败: {e}")
+        try:
+            driver.save_screenshot("/tmp/selenium_error.png")
+            print(f"   📸 错误页面已截图")
+        except:
+            pass
+    finally:
+        driver.quit()
+
+    return ""
+
+
 
 
 def relist_with_api(product: dict, config: dict) -> str:

@@ -449,6 +449,10 @@ def relist_with_playwright(product: dict, config: dict) -> str:
             editor.click()
             time.sleep(0.5)
             editor.send_keys(product["title"])
+            # 换行后填写描述
+            if product.get("desc"):
+                editor.send_keys("\n")
+                editor.send_keys(product["desc"])
             # 触发 input 事件确保 React/Vue 检测到输入
             driver.execute_script('arguments[0].dispatchEvent(new Event("input", {bubbles: true}));', editor)
             print(f"   ✏️ 标题已填写")

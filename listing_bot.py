@@ -467,6 +467,7 @@ def relist_with_playwright(product: dict, config: dict) -> str:
         except Exception as e:
             print(f"   ⚠️ 价格填写失败: {e}")
 
+        # 上传图片（支持多张）
         if product.get("img_folder"):
             img_dir = PROJECT_DIR / product["img_folder"]
             if img_dir.exists():
@@ -475,8 +476,10 @@ def relist_with_playwright(product: dict, config: dict) -> str:
                     try:
                         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"]')))
                         file_input = driver.find_element(By.CSS_SELECTOR, 'input[type="file"]')
-                        file_input.send_keys(str(img_files[0]))
-                        print(f"   📷 图片已上传")
+                        # 上传所有图片（最多9张）
+                        img_paths = "\n".join([str(f) for f in img_files[:9]])
+                        file_input.send_keys(img_paths)
+                        print(f"   📷 图片已上传: {len(img_files[:9])}张")
                         time.sleep(5)
                     except Exception as e:
                         print(f"   ⚠️ 图片上传失败: {e}")

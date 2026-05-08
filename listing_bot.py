@@ -810,7 +810,31 @@ def main():
         sys.exit(1)
     
     if args.monitor:
-        print("🔄 监控模式开发中...")
+        print(f"🔄 监控模式已启动，每{args.interval}秒检查一次...")
+        while True:
+            try:
+                products = load_products(PRODUCTS_EXCEL)
+                for product in products:
+                    if product["status"] == "待上架":
+                        print(f"\n📦 检测到待上架商品: {product['title']}")
+                        config = load_config()
+                        new_id = relist_with_playwright(product, config)
+                        if new_id:
+                            update_product(PRODUCTS_EXCEL, product["row"], {
+                                "status": "已上架",
+                                "item_id": new_id,
+                                "last_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                            print(f"✅ 上架成功: {new_id}")
+                        else:
+                            print(f"⚠️ 上架失败，保持待上架状态")
+                time.sleep(args.interval)
+            except KeyboardInterrupt:
+                print("\n👋 监控已停止")
+                break
+            except Exception as e:
+                print(f"❌ 监控异常: {e}")
+                time.sleep(args.interval)
     else:
         products = load_products(PRODUCTS_EXCEL)
         for product in products:

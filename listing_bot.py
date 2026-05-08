@@ -478,13 +478,37 @@ def relist_with_playwright(product: dict, config: dict) -> str:
                 img_files = list(img_dir.glob("*.*"))
                 if img_files:
                     try:
-                        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"]')))
-                        file_input = driver.find_element(By.CSS_SELECTOR, 'input[type="file"]')
-                        # 上传所有图片（最多9张）
-                        img_paths = "\n".join([str(f) for f in img_files[:9]])
-                        file_input.send_keys(img_paths)
-                        print(f"   📷 图片已上传: {len(img_files[:9])}张")
-                        time.sleep(5)
+                        # 滚动到页面底部，让上传区域可见
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+                        time.sleep(2)
+
+                        # 查找文件输入框（可能需要先展开上传区域）
+                        file_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
+                        if not file_inputs:
+                            # 可能上传区域被折叠，尝试点击上传按钮展开
+                            upload_btns = driver.find_elements(By.XPATH, '//*[contains(.,"上传图片") or contains(.,"添加图片") or contains(.,"选择图片")]')
+                            for btn in upload_btns:
+                                if btn.is_displayed():
+                                    try:
+                                        btn.click()
+                                        time.sleep(2)
+                                        break
+                                    except:
+                                        pass
+                            file_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
+
+                        if file_inputs:
+                            file_input = file_inputs[0]
+                            # 滚动到元素位置
+                            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", file_input)
+                            time.sleep(1)
+                            # 上传所有图片（最多9张）
+                            img_paths = "\n".join([str(f) for f in img_files[:9]])
+                            file_input.send_keys(img_paths)
+                            print(f"   📷 图片已上传: {len(img_files[:9])}张")
+                            time.sleep(5)
+                        else:
+                            print(f"   ⚠️ 未找到图片上传框")
                     except Exception as e:
                         print(f"   ⚠️ 图片上传失败: {e}")
 

@@ -19,8 +19,9 @@ from context_manager import ChatContextManager
 
 
 class XianyuLive:
-    def __init__(self, cookies_str):
+    def __init__(self, cookies_str, bot):
         self.xianyu = XianyuApis()
+        self.bot = bot
         self.base_url = 'wss://wss-goofish.dingtalk.com/'
         self.cookies_str = cookies_str
         self.cookies = trans_cookies(cookies_str)
@@ -138,7 +139,7 @@ class XianyuLive:
                             else:
                                 logger.warning(f"⚠️ 上架失败: {product.get('title')}")
                         threading.Thread(target=relist_thread, daemon=True).start()
-                        time.sleep(5)
+                        await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"检查待上架商品失败: {e}")
 
@@ -221,20 +222,32 @@ class XianyuLive:
         logger.info('连接注册完成')
 
         # 启动时自动上架待发布的商品
-        self.auto_relist_pending_products()
+        await self.auto_relist_pending_products()
 
     def is_chat_message(self, message):
         """判断是否为用户聊天消息"""
         try:
-            return (
-                isinstance(message, dict)
-                and "1" in message
-                and isinstance(message["1"], dict)  # 确保是字典类型
-                and "10" in message["1"]
-                and isinstance(message["1"]["10"], dict)  # 确保是字典类型
-                and "reminderContent" in message["1"]["10"]
-            )
-        except Exception:
+            if not isinstance(message, dict):
+                logger.debug(f"is_chat_message: message不是dict类型")
+                return False
+            if "1" not in message:
+                logger.debug(f"is_chat_message: message没有'1'字段")
+                return False
+            if not isinstance(message["1"], dict):
+                logger.debug(f"is_chat_message: message['1']不是dict类型，是{type(message['1'])}")
+                return False
+            if "10" not in message["1"]:
+                logger.debug(f"is_chat_message: message['1']没有'10'字段")
+                return False
+            if not isinstance(message["1"]["10"], dict):
+                logger.debug(f"is_chat_message: message['1']['10']不是dict类型")
+                return False
+            if "reminderContent" not in message["1"]["10"]:
+                logger.debug(f"is_chat_message: message['1']['10']没有'reminderContent'字段")
+                return False
+            return True
+        except Exception as e:
+            logger.debug(f"is_chat_message: 异常 {e}")
             return False
 
     def is_sync_package(self, message_data):
@@ -335,7 +348,7 @@ class XianyuLive:
             self.enter_manual_mode(chat_id)
             return "manual"
 
-    def auto_relist_pending_products(self):
+    async def auto_relist_pending_products(self):
         """启动时自动上架待发布的商品"""
         try:
             products = load_products(PRODUCTS_EXCEL)
@@ -345,6 +358,23 @@ class XianyuLive:
                 logger.info("没有待上架的商品")
                 return
 
+            # 检查浏览器是否可用（本地 Chrome 或 Selenium Grid）
+            chrome_binary = os.path.expanduser("~/chrome-portable/opt/google/chrome/google-chrome")
+            chromedriver_path = os.path.expanduser("~/.wdm/drivers/chromedriver/linux64/148.0.7778.167/chromedriver-linux64/chromedriver")
+            has_local_chrome = os.path.exists(chrome_binary) and os.path.exists(chromedriver_path)
+
+            if not has_local_chrome:
+                import requests as req
+                selenium_url = os.getenv("SELENIUM_URL", "http://selenium:4444")
+                try:
+                    resp = req.get(f"{selenium_url}/status", timeout=5)
+                    if resp.status_code != 200:
+                        logger.warning(f"Selenium Grid 不可用，跳过自动上架")
+                        return
+                except Exception as e:
+                    logger.warning(f"Selenium Grid 连接失败，跳过自动上架: {e}")
+                    return
+
             logger.info(f"发现 {len(pending_products)} 个待上架商品，开始自动上架...")
 
             for product in pending_products:
@@ -353,9 +383,9 @@ class XianyuLive:
 
                     # 在后台线程执行上架
                     def relist_thread():
-                        from listing_bot import relist_with_playwright, load_config
+                        from listing_bot import relist_with_selenium, load_config
                         config = load_config()
-                        new_item_id = relist_with_playwright(product, config)
+                        new_item_id = relist_with_selenium(product, config)
 
                         if new_item_id:
                             from datetime import datetime
@@ -370,42 +400,13 @@ class XianyuLive:
 
                     threading.Thread(target=relist_thread, daemon=True).start()
                     # 间隔5秒上架，避免并发过快
-                    time.sleep(5)
+                    await asyncio.sleep(5)
 
                 except Exception as e:
                     logger.error(f"上架商品失败: {e}")
 
         except Exception as e:
             logger.error(f"自动上架失败: {e}")
-
-    def _auto_relist_thread(self, item_id, buyer_id):
-        """后台线程：自动发货+重新上架"""
-        logger.info(f'🤖 开始自动上架流程 (商品: {item_id}, 买家: {buyer_id})')
-        
-        # 查找对应的商品配置
-        products = load_products(PRODUCTS_EXCEL)
-        target_product = None
-        for p in products:
-            if p.get("item_id") == item_id or (p.get("status") == "待上架" and not target_product):
-                target_product = p
-                break
-        
-        if not target_product:
-            logger.warning(f'未找到商品ID {item_id} 的配置，使用默认模板')
-            # 使用第一个待上架商品
-            for p in products:
-                if p.get("status") == "待上架":
-                    target_product = p
-                    break
-        
-        if not target_product:
-            logger.error('没有可用的商品配置，无法自动上架')
-            return
-        
-        try:
-            handle_sale_auto_relist(item_id, buyer_id, target_product)
-        except Exception as e:
-            logger.error(f'自动上架失败: {e}')
 
     def format_price(self, price):
         """
@@ -481,10 +482,11 @@ class XianyuLive:
                     ack["headers"]["dt"] = message["headers"]["dt"]
                 await websocket.send(json.dumps(ack))
             except Exception as e:
-                pass
+                logger.debug(f"发送ACK失败: {e}")
 
-            # 如果不是同步包消息,直接返回
+            # 如果不是同步包消息,记录日志并返回
             if not self.is_sync_package(message_data):
+                logger.debug(f"非同步包消息,跳过: {message_data}")
                 return
 
             # 获取同步状态信息用于发送已读回执
@@ -533,6 +535,7 @@ class XianyuLive:
                 except Exception as e:
                     # logger.info(f'加密数据: {data}')
                     decrypted_data = decrypt(data)
+                    logger.debug(f"解密后的数据: {decrypted_data[:500] if len(decrypted_data) > 500 else decrypted_data}")
                     message = json.loads(decrypted_data)
             except Exception as e:
                 logger.error(f"消息解密失败: {e}")
@@ -582,10 +585,7 @@ class XianyuLive:
                         chat_id = message["1"]["2"].split('@')[0]
                         url_info = message["1"]["10"]["reminderUrl"]
                         item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
-                        
-                        # 获取发货消息
-                        delivery_msg = get_delivery_message_for_product(item_id)
-                        
+
                         # 在后台线程执行发货+上架（不阻塞消息处理）
                         def background_task():
                             products = load_products(PRODUCTS_EXCEL)
@@ -595,28 +595,27 @@ class XianyuLive:
                                     target = p
                                     break
                             if not target:
-                                for p in products:
-                                    if p.get("status") == "待上架":
-                                        target = p
-                                        break
-                            if target:
-                                do_confirm_and_relist(item_id, user_id, target, chat_id)
-                            else:
-                                logger.warning(f'未找到商品 {item_id} 的配置')
-                        
+                                logger.warning(f'未找到商品 {item_id} 的配置，跳过自动发货')
+                                return
+                            # 执行确认发货+重新上架，获取结果中的发货消息
+                            result = do_confirm_and_relist(item_id, user_id, target, chat_id)
+                            delivery_msg = result.get("delivery_msg")
+                            # 通过事件循环从线程中发送消息
+                            if delivery_msg:
+                                asyncio.run_coroutine_threadsafe(
+                                    self.send_msg(websocket, chat_id, user_id, delivery_msg),
+                                    asyncio.get_event_loop()
+                                )
+                                logger.info(f'已发送发货消息给买家 {user_id}')
+
                         threading.Thread(target=background_task, daemon=True).start()
-                        
-                        # 立即发送云盘链接给买家（如果有）
-                        if delivery_msg and websocket:
-                            await self.send_msg(websocket, chat_id, user_id, delivery_msg)
-                            logger.info(f'已发送发货消息给买家 {user_id}')
-                        
+
                     except Exception as e:
                         logger.error(f'自动发货/发送链接失败: {e}')
                     return
 
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"订单消息解析跳过: {e}")
 
             # 判断消息类型
             if self.is_typing_status(message):
@@ -624,6 +623,7 @@ class XianyuLive:
                 return
             elif not self.is_chat_message(message):
                 logger.debug("其他非聊天消息")
+                logger.debug(f"原始消息结构: message.get('1') type={type(message.get('1'))}, message.get('3')={message.get('3')}")
                 logger.debug(f"原始消息: {message}")
                 return
 
@@ -701,7 +701,7 @@ class XianyuLive:
             # 获取完整的对话上下文
             context = self.context_manager.get_context_by_chat(chat_id)
             # 生成回复
-            bot_reply = bot.generate_reply(
+            bot_reply = self.bot.generate_reply(
                 send_message,
                 item_description,
                 context=context
@@ -716,7 +716,7 @@ class XianyuLive:
             self.context_manager.add_message_by_chat(chat_id, send_user_id, item_id, "user", send_message)
 
             # 检查是否为价格意图,如果是则增加议价次数
-            if bot.last_intent == "price":
+            if self.bot.last_intent == "price":
                 self.context_manager.increment_bargain_count_by_chat(chat_id)
                 bargain_count = self.context_manager.get_bargain_count_by_chat(chat_id)
                 logger.info(f"用户 {send_user_name} 对商品 {item_id} 的议价次数: {bargain_count}")
@@ -843,6 +843,9 @@ class XianyuLive:
 
                             message_data = json.loads(message)
 
+                            # 记录所有收到的消息（调试用）
+                            logger.debug(f"收到WebSocket消息: {message_data}")
+
                             # 处理心跳响应
                             if await self.handle_heartbeat_response(message_data):
                                 continue
@@ -955,7 +958,7 @@ if __name__ == '__main__':
         logger.info("已加载 .env.example 默认配置")
 
     # 配置日志级别
-    log_level = os.getenv("LOG_LEVEL", "DEBUG").upper()
+    log_level = os.getenv("LOG_LEVEL", "WARNING").upper()
     logger.remove()  # 移除默认handler
     logger.add(
         sys.stderr,
@@ -969,6 +972,6 @@ if __name__ == '__main__':
 
     cookies_str = os.getenv("COOKIES_STR")
     bot = XianyuReplyBot()
-    xianyuLive = XianyuLive(cookies_str)
+    xianyuLive = XianyuLive(cookies_str, bot)
     # 常驻进程
     asyncio.run(xianyuLive.main())

@@ -86,6 +86,15 @@ Product data is managed via Excel at `data/products.xlsx` with columns for statu
 python listing_bot.py --init
 ```
 
+**Auto-listing flow** (triggered on "等待卖家发货" order event):
+1. `do_confirm_and_relist` is called in a background thread
+2. `confirm_delivery` confirms the order via API
+3. `relist_with_selenium` uses Selenium WebDriver (via Selenium Grid) to republish the product
+4. Product status and item_id are updated in Excel
+5. Delivery message (cloud link) is sent to buyer after completion
+
+**Browser automation**: Uses Selenium WebDriver connecting to a Selenium Grid (`SELENIUM_URL`, default `http://selenium:4444`). The function `relist_with_selenium` handles page navigation, cookie injection, form filling, and image upload. Includes retry logic (up to 3 attempts) and explicit WebDriverWait for page loads.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |

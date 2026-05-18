@@ -70,5 +70,9 @@ COPY prompts/default_prompt_example.txt prompts/default_prompt.txt
 # 创建数据目录
 RUN mkdir -p data prompts
 
+# 非root用户运行
+RUN useradd -m -r appuser && chown -R appuser:appuser /app
+USER appuser
+
 # 容器启动时运行的命令
 CMD ["python", "main.py"]

@@ -146,8 +146,8 @@ class XianyuApis:
                 return self.get_token(device_id, 0)  # 重置重试次数
             else:
                 logger.error("重新登录失败，Cookie已失效")
-                logger.error("🔴 程序即将退出，请更新.env文件中的COOKIES_STR后重新启动")
-                sys.exit(1)  # 直接退出程序
+                logger.error("🔴 请更新.env文件中的COOKIES_STR后重新启动")
+                raise RuntimeError("Cookie已失效，请更新COOKIES_STR")
 
         params = {
             'jsv': '2.7.2',
@@ -205,35 +205,8 @@ class XianyuApis:
                         logger.error(f"❌ 触发风控: {ret_value}")
                         logger.error("🔴 系统目前无法自动解决，请进入闲鱼网页版-点击消息-过滑块-复制最新的Cookie")
                         
-                        # 获取用户输入的新Cookie
-                        print("\n" + "="*50)
-                        new_cookie_str = input("请输入新的Cookie字符串 (复制浏览器中的完整cookie，直接回车则退出程序): ").strip()
-                        print("="*50 + "\n")
-                        
-                        if new_cookie_str:
-                            try:
-                                # 解析cookie字符串并更新session
-                                from http.cookies import SimpleCookie
-                                cookie = SimpleCookie()
-                                cookie.load(new_cookie_str)
-                                
-                                # 清空旧cookie并设置新cookie
-                                self.session.cookies.clear()
-                                for key, morsel in cookie.items():
-                                    self.session.cookies.set(key, morsel.value, domain='.goofish.com')
-                                
-                                logger.success("✅ Cookie已更新，正在尝试重连...")
-                                # 同步更新到.env文件
-                                self.update_env_cookies()
-                                
-                                # 立即重试
-                                return self.get_token(device_id, 0)
-                            except Exception as e:
-                                logger.error(f"Cookie解析失败: {e}")
-                                sys.exit(1)
-                        else:
-                            logger.info("用户取消输入，程序退出")
-                            sys.exit(1)
+                        logger.error("🔴 触发风控，需要手动更新Cookie。请更新.env文件中的COOKIES_STR后重启程序。")
+                        raise RuntimeError("触发风控，Cookie需要手动更新")
 
                     logger.warning(f"Token API调用失败，错误信息: {ret_value}")
                     # 处理响应中的Set-Cookie

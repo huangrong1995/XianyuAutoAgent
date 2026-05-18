@@ -3,8 +3,8 @@ services:
     image: selenium/standalone-chromium:4.43.0
     container_name: selenium
     ports:
-      - "4444:4444"    # Selenium Grid
-      - "7900:7900"    # noVNC web界面
+      - "127.0.0.1:4444:4444"    # Selenium Grid
+      - "127.0.0.1:7900:7900"    # noVNC web界面
     environment:
       - SE_SCREEN_WIDTH=1920
       - SE_SCREEN_HEIGHT=1080
@@ -16,7 +16,7 @@ services:
     restart: always
 
   XianyuAutoAgent:
-    image: shaxiu/xianyuautoagent:latest
+    image: shaxiu/xianyuautoagent:2.0
     container_name: xianyuautoagent
     restart: always
     volumes:

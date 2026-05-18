@@ -34,7 +34,8 @@ class ChatContextManager:
             
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+        cursor.execute("PRAGMA journal_mode=WAL")
+
         # 创建消息表
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (

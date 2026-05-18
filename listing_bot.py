@@ -10,33 +10,23 @@ import os
 import sys
 import json
 import time
-import random
 import argparse
-import base64
-import hashlib
-import asyncio
 from pathlib import Path
 from datetime import datetime
-from threading import Thread
 
 import openpyxl
 import requests
+import threading
 from dotenv import load_dotenv
+from utils.xianyu_utils import generate_sign
+
+_excel_lock = threading.Lock()
 
 # 项目路径
 PROJECT_DIR = Path(__file__).parent
 DATA_DIR = PROJECT_DIR / "data"
 STATE_FILE = DATA_DIR / "listing_state.json"
 PRODUCTS_EXCEL = DATA_DIR / "products.xlsx"
-
-
-def generate_sign(t: str, token: str, data: str) -> str:
-    """生成签名"""
-    app_key = "34839810"
-    msg = f"{token}&{t}&{app_key}&{data}"
-    md5_hash = hashlib.md5()
-    md5_hash.update(msg.encode('utf-8'))
-    return md5_hash.hexdigest()
 
 
 def upload_image(image_path: str, config: dict) -> str:
@@ -80,7 +70,7 @@ def upload_image(image_path: str, config: dict) -> str:
             # 如果响应就是URL字符串
             if result.startswith("http"):
                 return result
-        except:
+        except Exception:
             pass
 
         print(f"   ⚠️ 图片上传解析失败")
@@ -180,17 +170,20 @@ def load_products(path: Path) -> list:
     """从 Excel 加载商品列表"""
     if not path.exists():
         return []
-    
-    wb = openpyxl.load_workbook(path)
-    ws = wb.active
+
+    with _excel_lock:
+        wb = openpyxl.load_workbook(path)
+        ws = wb.active
     
     products = []
     for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if not row[0]:
             continue
-        (seq, status, item_id, title, price, desc, img_folder, 
+        if len(row) < 16:
+            continue
+        (seq, status, item_id, title, price, desc, img_folder,
          category, tags, baidu_link, quark_link, baidu_pwd, quark_pwd,
-         msg_template, sold_count, last_time) = row
+         msg_template, sold_count, last_time) = row[:16]
         products.append({
             "row": i,
             "seq": seq,
@@ -210,14 +203,16 @@ def load_products(path: Path) -> list:
             "sold_count": sold_count or 0,
             "last_time": last_time or ""
         })
-    
+
+    wb.close()
     return products
 
 
 def update_product(path: Path, row_num: int, updates: dict):
     """更新商品信息"""
-    wb = openpyxl.load_workbook(path)
-    ws = wb.active
+    with _excel_lock:
+        wb = openpyxl.load_workbook(path)
+        ws = wb.active
     
     col_map = {
         "status": 2, "item_id": 3, "title": 4, "price": 5, "desc": 6,
@@ -229,8 +224,9 @@ def update_product(path: Path, row_num: int, updates: dict):
     for key, value in updates.items():
         if key in col_map:
             ws.cell(row=row_num, column=col_map[key]).value = value
-    
+
     wb.save(path)
+    wb.close()
 
 
 def build_delivery_message(product: dict, link_type: str = "baidu") -> str:
@@ -321,60 +317,118 @@ def confirm_delivery(cookies: list, item_id: str, buyer_id: str) -> bool:
             return True
         else:
             print(f"   ⚠️  发货响应: {data}")
-            return True  # 仍返回成功，避免中断流程
+            return False
     except Exception as e:
         print(f"   ❌ 发货API失败: {e}")
-        return True  # 继续发送链接
+        return False
 
 
-def relist_with_playwright(product: dict, config: dict) -> str:
+def relist_with_selenium(product: dict, config: dict) -> str:
     """使用 Selenium WebDriver 连接真实浏览器上架"""
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
     import os
 
     selenium_url = os.getenv("SELENIUM_URL", "http://selenium:4444")
-    cookies = parse_cookies(config["cookies_str"])
+    max_retries = 2
 
-    try:
-        options = Options()
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1920,1080")
+    for attempt in range(max_retries + 1):
+        result = _try_selenium_listing(product, config, selenium_url)
+        if result:
+            return result
+        if attempt < max_retries:
+            print(f"   🔄 上架失败，重试 ({attempt + 1}/{max_retries})...")
+            time.sleep(3)
 
-        driver = webdriver.Remote(
-            command_executor=selenium_url + "/wd/hub",
-            options=options
-        )
-        print(f"   🔗 已连接 Selenium Grid")
-    except Exception as e:
-        print(f"   ⚠️ Selenium连接失败: {e}")
-        return ""
+    return ""
+
+
+def _try_selenium_listing(product: dict, config: dict, selenium_url: str) -> str:
+    """单次 Selenium 上架尝试"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+    import os
+
+    chrome_binary = os.path.expanduser("~/chrome-portable/opt/google/chrome/google-chrome")
+    chromedriver_path = os.path.expanduser("~/.wdm/drivers/chromedriver/linux64/148.0.7778.167/chromedriver-linux64/chromedriver")
+    chrome_profile = os.path.expanduser("~/.xianyu-chrome-profile")
+
+    options = Options()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
+    # 使用持久化配置文件，复用登录状态
+    options.add_argument(f"--user-data-dir={chrome_profile}")
+
+    driver = None
+    # 优先使用本地 Chrome
+    if os.path.exists(chrome_binary) and os.path.exists(chromedriver_path):
+        try:
+            from selenium.webdriver.chrome.service import Service
+            options.binary_location = chrome_binary
+            options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
+            service = Service(chromedriver_path)
+            driver = webdriver.Chrome(service=service, options=options)
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+            })
+            print(f"   🔗 已启动本地 Chrome（持久化配置）")
+        except Exception as e:
+            print(f"   ⚠️ 本地Chrome启动失败: {e}")
+
+    # 尝试 Selenium Grid
+    if driver is None:
+        try:
+            options = Options()
+            driver = webdriver.Remote(command_executor=selenium_url + "/wd/hub", options=options)
+            print(f"   🔗 已连接 Selenium Grid")
+        except Exception as e:
+            print(f"   ⚠️ Selenium连接失败: {e}")
+            return ""
+
+    # 本地 Chrome 失败时尝试 Selenium Grid
+    if driver is None:
+        try:
+            driver = webdriver.Remote(
+                command_executor=selenium_url + "/wd/hub",
+                options=options
+            )
+            print(f"   🔗 已连接 Selenium Grid")
+        except Exception as e:
+            print(f"   ⚠️ Selenium连接失败: {e}")
+            return ""
 
     def get_login_modal():
         """检测登录弹窗"""
-        # 只检查 passport iframe 是否显示登录界面
         try:
             iframes = driver.find_elements(By.TAG_NAME, 'iframe')
             for iframe in iframes:
                 src = iframe.get_attribute('src') or ''
                 if 'passport' in src and iframe.is_displayed():
-                    # 检查iframe是否包含扫码登录内容（不是已登录状态）
                     driver.switch_to.frame(iframe)
                     try:
-                        # 查找QR code canvas或扫码登录相关的元素
                         qr_canvas = driver.find_elements(By.CSS_SELECTOR, 'canvas, [class*="qrcode"], [class*="QRCode"]')
                         for elem in qr_canvas:
                             if elem.is_displayed():
                                 driver.switch_to.default_content()
                                 return iframe
-                    except:
+                    except Exception:
                         pass
                     driver.switch_to.default_content()
-        except:
+        except Exception:
             driver.switch_to.default_content()
         return None
 
@@ -387,7 +441,6 @@ def relist_with_playwright(product: dict, config: dict) -> str:
         for i in range(60):
             time.sleep(1)
             try:
-                # 检查passport iframe是否消失
                 passport_iframe_visible = False
                 iframes = driver.find_elements(By.TAG_NAME, 'iframe')
                 for iframe in iframes:
@@ -395,14 +448,12 @@ def relist_with_playwright(product: dict, config: dict) -> str:
                     if 'passport' in src and iframe.is_displayed():
                         passport_iframe_visible = True
                         break
-                
+
                 if not passport_iframe_visible:
-                    # 获取新cookies
                     print(f"   ✅ 登录成功，正在获取新Cookie...")
                     new_cookies_list = driver.get_cookies()
                     new_cookies_str = "; ".join([f"{c['name']}={c['value']}" for c in new_cookies_list])
                     config["cookies_str"] = new_cookies_str
-                    # 保存到 .env 文件
                     save_cookies_to_env(new_cookies_str)
                     return True
             except Exception as e:
@@ -413,36 +464,40 @@ def relist_with_playwright(product: dict, config: dict) -> str:
         return False
 
     try:
-        print(f"   🌐 正在访问主页...")
-        # 先访问主站建立域名上下文
-        driver.get("https://www.goofish.com")
-        time.sleep(5)
+        wait = WebDriverWait(driver, 15)
 
-        # 添加cookies
-        cookies = parse_cookies(config["cookies_str"])
-        for cookie in cookies:
-            try:
-                driver.add_cookie(cookie)
-            except Exception as e:
-                pass  # 静默忽略失败
+        print(f"   🌐 正在访问发布页面...")
+        driver.get("https://www.goofish.com/publish")
 
-        # 刷新页面让cookies生效
-        driver.refresh()
-        time.sleep(5)
-        
+        # 等待页面加载完成
+        try:
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+        except TimeoutException:
+            print(f"   ⚠️ 页面加载超时")
+
+        # 检查是否需要登录
+        time.sleep(3)
+        current_url = driver.current_url
+        if "login" in current_url.lower() or "passport" in current_url.lower():
+            print(f"   ⚠️ 需要登录，当前URL: {current_url}")
+            print(f"   请先运行 selenium_login.py 登录")
+            driver.save_screenshot("/tmp/login_required.png")
+            return ""
+
         # 检查登录弹窗
         if get_login_modal():
             if not wait_for_login():
                 print(f"   ❌ 登录超时")
+                driver._quit = True
                 driver.quit()
                 return ""
 
-        print(f"   🌐 正在打开发布页面...")
-        driver.get("https://www.goofish.com/publish")
-        time.sleep(5)
-
-        wait = WebDriverWait(driver, 15)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[contenteditable="true"]')))
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[contenteditable="true"]')))
+        except TimeoutException:
+            print(f"   ⚠️ 发布页面加载超时")
+            driver.save_screenshot("/tmp/publish_timeout.png")
+            return ""
         print(f"   📄 页面已加载: {driver.title}")
 
         try:
@@ -450,23 +505,20 @@ def relist_with_playwright(product: dict, config: dict) -> str:
             editor.click()
             time.sleep(0.5)
             editor.send_keys(product["title"])
-            # 换行后填写描述
             if product.get("desc"):
                 editor.send_keys("\n")
                 editor.send_keys(product["desc"])
-            # 触发 input 事件确保 React/Vue 检测到输入
             driver.execute_script('arguments[0].dispatchEvent(new Event("input", {bubbles: true}));', editor)
             print(f"   ✏️ 标题已填写")
         except Exception as e:
             print(f"   ⚠️ 标题填写失败: {e}")
 
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[placeholder="0.00"]')))
         try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[placeholder="0.00"]')))
             price_input = driver.find_element(By.CSS_SELECTOR, 'input[placeholder="0.00"]')
             price_input.click()
             time.sleep(0.3)
             price_input.send_keys(str(product["price"]))
-            # 触发 input 事件
             driver.execute_script('arguments[0].dispatchEvent(new Event("input", {bubbles: true}));', price_input)
             print(f"   ✏️ 价格已填写: {product['price']}")
         except Exception as e:
@@ -479,14 +531,11 @@ def relist_with_playwright(product: dict, config: dict) -> str:
                 img_files = list(img_dir.glob("*.*"))
                 if img_files:
                     try:
-                        # 滚动到页面底部，让上传区域可见
                         driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
                         time.sleep(2)
 
-                        # 查找文件输入框（可能需要先展开上传区域）
                         file_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
                         if not file_inputs:
-                            # 可能上传区域被折叠，尝试点击上传按钮展开
                             upload_btns = driver.find_elements(By.XPATH, '//*[contains(.,"上传图片") or contains(.,"添加图片") or contains(.,"选择图片")]')
                             for btn in upload_btns:
                                 if btn.is_displayed():
@@ -494,20 +543,22 @@ def relist_with_playwright(product: dict, config: dict) -> str:
                                         btn.click()
                                         time.sleep(2)
                                         break
-                                    except:
+                                    except Exception:
                                         pass
                             file_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
 
                         if file_inputs:
                             file_input = file_inputs[0]
-                            # 滚动到元素位置
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", file_input)
                             time.sleep(1)
-                            # 上传所有图片（最多9张）
                             img_paths = "\n".join([str(f) for f in img_files[:9]])
                             file_input.send_keys(img_paths)
                             print(f"   📷 图片已上传: {len(img_files[:9])}张")
-                            time.sleep(5)
+                            # 等待图片上传完成
+                            try:
+                                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'img[src*="goofish"], img[src*="alicdn"]')))
+                            except TimeoutException:
+                                time.sleep(3)
                         else:
                             print(f"   ⚠️ 未找到图片上传框")
                     except Exception as e:
@@ -516,6 +567,7 @@ def relist_with_playwright(product: dict, config: dict) -> str:
         if get_login_modal():
             if not wait_for_login():
                 print(f"   ❌ 登录超时")
+                driver._quit = True
                 driver.quit()
                 return ""
 
@@ -523,17 +575,19 @@ def relist_with_playwright(product: dict, config: dict) -> str:
             wait.until(EC.presence_of_element_located((By.XPATH, '//button[contains(.,"发布")]')))
             publish_btn = driver.find_element(By.XPATH, '//button[contains(.,"发布")]')
             print(f"   🔘 找到发布按钮")
-            # 等待一下让页面稳定
             time.sleep(2)
             publish_btn.click()
             print(f"   🔘 已点击发布按钮，等待响应...")
-            time.sleep(10)
+            # 等待页面跳转或响应
+            try:
+                wait.until(lambda d: "item?id=" in d.current_url or "itemId=" in d.current_url)
+            except TimeoutException:
+                time.sleep(5)
         except Exception as e:
             print(f"   ⚠️ 发布按钮点击失败: {e}")
 
         url = driver.current_url
         print(f"   🔗 发布后URL: {url}")
-        # 检查 item?id= 或 itemId=
         if "item?id=" in url:
             item_id = url.split("item?id=")[1].split("&")[0]
             print(f"   ✅ 上架成功: {item_id}")
@@ -550,10 +604,14 @@ def relist_with_playwright(product: dict, config: dict) -> str:
         try:
             driver.save_screenshot("/tmp/selenium_error.png")
             print(f"   📸 错误页面已截图")
-        except:
+        except Exception:
             pass
     finally:
-        driver.quit()
+        if not getattr(driver, '_quit', False):
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     return ""
 
@@ -732,15 +790,10 @@ def try_relist(product: dict, config: dict) -> str:
     if result:
         return result
 
-    # API方式失败，尝试Playwright
-    print(f"   🔄 API方式失败，尝试Playwright方式...")
-    try:
-        from playwright.sync_api import sync_playwright
-        result = relist_with_playwright(product, config)
-        return result
-    except ImportError:
-        print(f"   ⚠️  Playwright未安装或不可用，上架失败")
-        return ""
+    # API方式失败，尝试Selenium方式
+    print(f"   🔄 API方式失败，尝试Selenium方式...")
+    result = relist_with_selenium(product, config)
+    return result
 
 
 # ============ 消息发送（供 main.py 调用）============
@@ -788,8 +841,10 @@ def do_confirm_and_relist(item_id: str, buyer_id: str, product: dict, send_chat_
     
     # 1. 确认发货
     print(f"\n📦 确认发货: 商品={item_id}, 买家={buyer_id}")
-    confirm_delivery(cookies, item_id, buyer_id)
-    
+    delivery_ok = confirm_delivery(cookies, item_id, buyer_id)
+    if not delivery_ok:
+        print(f"   ⚠️ 发货确认失败，继续尝试重新上架")
+
     # 2. 准备发货消息
     if product:
         result["delivery_msg"] = get_delivery_message_for_product(product=product)
@@ -797,7 +852,7 @@ def do_confirm_and_relist(item_id: str, buyer_id: str, product: dict, send_chat_
         
         # 3. 重新上架
         print(f"🚀 重新上架...")
-        new_id = relist_with_playwright(product, config)
+        new_id = relist_with_selenium(product, config)
         result["new_item_id"] = new_id
         
         # 4. 更新商品状态
@@ -843,7 +898,7 @@ def main():
                     if product["status"] == "待上架":
                         print(f"\n📦 检测到待上架商品: {product['title']}")
                         config = load_config()
-                        new_id = relist_with_playwright(product, config)
+                        new_id = relist_with_selenium(product, config)
                         if new_id:
                             update_product(PRODUCTS_EXCEL, product["row"], {
                                 "status": "已上架",
@@ -866,7 +921,7 @@ def main():
             if product["status"] == "待上架":
                 print(f"\n📦 上架: {product['title']}")
                 config = load_config()
-                new_id = relist_with_playwright(product, config)
+                new_id = relist_with_selenium(product, config)
                 if new_id:
                     update_product(PRODUCTS_EXCEL, product["row"], {
                         "status": "已上架",

@@ -172,8 +172,26 @@ class XianyuReplyBot:
 
     def _safe_filter(self, text: str) -> str:
         """安全过滤模块"""
-        blocked_phrases = ["微信", "QQ", "支付宝", "银行卡", "线下"]
-        return "[安全提醒]请通过平台沟通" if any(p in text for p in blocked_phrases) else text
+        blocked_phrases = ["微信", "QQ", "支付宝", "银行卡", "线下", "加我", "WX:", "vx:", "VX:", "wx:"]
+        if any(p in text for p in blocked_phrases):
+            return "[安全提醒]请通过平台沟通"
+        return text
+
+    def _sanitize_input(self, text: str) -> str:
+        """对用户输入做基础消毒，防止 prompt 注入"""
+        import re as _re
+        injection_patterns = [
+            r'(?i)ignore\s+(all\s+)?previous\s+instructions',
+            r'(?i)ignore\s+(all\s+)?above\s+instructions',
+            r'(?i)you\s+are\s+now\s+',
+            r'(?i)system\s*:\s*',
+            r'(?i)new\s+instructions?\s*:',
+            r'(?i)disregard\s+(all\s+)?prior',
+            r'(?i)forget\s+(all\s+)?previous',
+        ]
+        for pattern in injection_patterns:
+            text = _re.sub(pattern, '[内容已过滤]', text)
+        return text
 
     def format_history(self, context: List[Dict]) -> str:
         """格式化对话历史"""
@@ -231,6 +249,7 @@ class XianyuReplyBot:
         logger.info("正在重新加载提示词...")
         self._init_system_prompts()
         self._init_agents()
+        self.router.classify_agent = self.agents['classify']
         logger.info("提示词重新加载完成")
 
 
@@ -291,9 +310,10 @@ class BaseAgent:
         return self.safety_filter(response)
 
     def _build_messages(self, user_msg: str, item_desc: str, context: str) -> List[Dict]:
+        sanitized_msg = self.bot._sanitize_input(user_msg) if hasattr(self.bot, '_sanitize_input') else user_msg
         return [
             {"role": "system", "content": f"【商品信息】{item_desc}\n【你与客户对话历史】{context}\n{self.system_prompt}"},
-            {"role": "user", "content": user_msg}
+            {"role": "user", "content": sanitized_msg}
         ]
 
     def _call_llm(self, messages: List[Dict], temperature: float = 0.4,
@@ -329,8 +349,8 @@ class TechAgent(BaseAgent):
 class ClassifyAgent(BaseAgent):
     """意图识别Agent"""
 
-    def generate(self, **args) -> str:
-        response = super().generate(**args)
+    def generate(self, user_msg: str, item_desc: str, context: str, bargain_count: int = 0) -> str:
+        response = super().generate(user_msg=user_msg, item_desc=item_desc, context=context, bargain_count=bargain_count)
         return response
 
 
